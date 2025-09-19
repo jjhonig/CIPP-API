@@ -25,17 +25,23 @@ function Invoke-CIPPStandardAntiSpamSafeList {
         UPDATECOMMENTBLOCK
             Run the Tools\Update-StandardsComments.ps1 script to update this comment block
     .LINK
-        https://docs.cipp.app/user-documentation/tenant/standards/list-standards/defender-standards#medium-impact
+        https://docs.cipp.app/user-documentation/tenant/standards/list-standards
     #>
 
     param($Tenant, $Settings)
+    $TestResult = Test-CIPPStandardLicense -StandardName 'AntiSpamSafeList' -TenantFilter $Tenant -RequiredCapabilities @('EXCHANGE_S_STANDARD', 'EXCHANGE_S_ENTERPRISE', 'EXCHANGE_S_STANDARD_GOV', 'EXCHANGE_S_ENTERPRISE_GOV', 'EXCHANGE_LITE') #No Foundation because that does not allow powershell access
+
+    if ($TestResult -eq $false) {
+        Write-Host "We're exiting as the correct license is not present for this standard."
+        return $true
+    } #we're done.
     ##$Rerun -Type Standard -Tenant $Tenant -Settings $Settings 'AntiSpamSafeList'
 
     try {
         $State = [System.Convert]::ToBoolean($Settings.EnableSafeList)
     } catch {
         Write-LogMessage -API 'Standards' -tenant $Tenant -message 'AntiSpamSafeList: Failed to convert the EnableSafeList parameter to a boolean' -sev Error
-        Return
+        return
     }
 
     try {
@@ -43,12 +49,13 @@ function Invoke-CIPPStandardAntiSpamSafeList {
     } catch {
         $ErrorMessage = Get-CippException -Exception $_
         Write-LogMessage -API 'Standards' -tenant $Tenant -message "Failed to get the Anti-Spam Connection Filter Safe List. Error: $($ErrorMessage.NormalizedError)" -sev Error -LogData $ErrorMessage
-        Return
+        return
     }
     $WantedState = $State -eq $true ? $true : $false
     $StateIsCorrect = if ($CurrentState -eq $WantedState) { $true } else { $false }
 
     if ($Settings.report -eq $true) {
+        Set-CIPPStandardsCompareField -FieldName 'standards.AntiSpamSafeList' -FieldValue $StateIsCorrect -TenantFilter $Tenant
         Add-CIPPBPAField -FieldName 'AntiSpamSafeList' -FieldValue $CurrentState -StoreAs bool -Tenant $Tenant
     }
 
@@ -74,7 +81,8 @@ function Invoke-CIPPStandardAntiSpamSafeList {
         if ($StateIsCorrect -eq $true) {
             Write-LogMessage -API 'Standards' -tenant $Tenant -message "The Anti-Spam Connection Filter Safe List is set correctly to $WantedState" -sev Info
         } else {
-            Write-LogMessage -API 'Standards' -tenant $Tenant -message "The Anti-Spam Connection Filter Safe List is not set correctly to $WantedState" -sev Alert
+            Write-StandardsAlert -message "The Anti-Spam Connection Filter Safe List is not set correctly to $WantedState" -object @{CurrentState = $CurrentState; WantedState = $WantedState } -tenant $Tenant -standardName 'AntiSpamSafeList' -standardId $Settings.standardId
+            Write-LogMessage -API 'Standards' -tenant $Tenant -message "The Anti-Spam Connection Filter Safe List is not set correctly to $WantedState" -sev Info
         }
     }
 }
