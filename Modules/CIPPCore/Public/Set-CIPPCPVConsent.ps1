@@ -17,12 +17,17 @@ function Set-CIPPCPVConsent {
     if ($Tenant.customerId -ne $TenantFilter) {
         return @('Not a valid tenant')
     }
+    if ($Tenant.delegatedPrivilegeStatus -eq 'directTenant') {
+        return @('Application is already consented to this tenant')
+    }
 
     if ($ResetSP) {
         try {
-            if ($PSCmdlet.ShouldProcess($ENV:ApplicationID, "Delete Service Principal from $TenantName")) {
-                $null = New-GraphPostRequest -Type DELETE -noauthcheck $true -uri "https://api.partnercenter.microsoft.com/v1/customers/$($TenantFilter)/applicationconsents/$($ENV:ApplicationID)" -scope 'https://api.partnercenter.microsoft.com/.default' -tenantid $env:TenantID
+            if ($PSCmdlet.ShouldProcess($env:ApplicationID, "Delete Service Principal from $TenantName")) {
+                $null = New-GraphPostRequest -Type DELETE -noauthcheck $true -uri "https://api.partnercenter.microsoft.com/v1/customers/$($TenantFilter)/applicationconsents/$($env:ApplicationID)" -scope 'https://api.partnercenter.microsoft.com/.default' -tenantid $env:TenantID
             }
+            # The SP is gone, so any cached token for this tenant is now invalid.
+            $null = Clear-CippTokenCache -TenantFilter $TenantFilter
             $Results.add("Deleted Service Principal from $TenantName")
         } catch {
             $ErrorMessage = Get-NormalizedError -Message $_.Exception.Message
@@ -32,7 +37,7 @@ function Set-CIPPCPVConsent {
 
     try {
         $AppBody = @{
-            ApplicationId     = $($ENV:ApplicationID)
+            ApplicationId     = $($env:ApplicationID)
             ApplicationGrants = @(
                 @{
                     EnterpriseApplicationId = '00000003-0000-0000-c000-000000000000'
@@ -40,24 +45,27 @@ function Set-CIPPCPVConsent {
                         'DelegatedPermissionGrant.ReadWrite.All',
                         'Directory.ReadWrite.All',
                         'AppRoleAssignment.ReadWrite.All'
-                    ) -Join ','
+                    ) -join ','
                 }
             )
         } | ConvertTo-Json
 
-        if ($PSCmdlet.ShouldProcess($ENV:ApplicationID, "Add Service Principal to $TenantName")) {
+        if ($PSCmdlet.ShouldProcess($env:ApplicationID, "Add Service Principal to $TenantName")) {
             $null = New-GraphpostRequest -body $AppBody -Type POST -noauthcheck $true -uri "https://api.partnercenter.microsoft.com/v1/customers/$($TenantFilter)/applicationconsents" -scope 'https://api.partnercenter.microsoft.com/.default' -tenantid $env:TenantID
             $Table = Get-CIPPTable -TableName cpvtenants
             $unixtime = [int64](([datetime]::UtcNow) - (Get-Date '1/1/1970')).TotalSeconds
             $GraphRequest = @{
                 LastApply     = "$unixtime"
-                applicationId = "$($ENV:ApplicationID)"
+                applicationId = "$($env:ApplicationID)"
                 Tenant        = "$($tenantfilter)"
                 PartitionKey  = 'Tenant'
                 RowKey        = "$($tenantfilter)"
             }
             Add-CIPPAzDataTableEntity @Table -Entity $GraphRequest -Force
         }
+        # Consent just changed; drop cached tokens so the next call picks up the new scopes
+        # instead of reusing one issued before this grant.
+        $null = Clear-CippTokenCache -TenantFilter $TenantFilter
         $Results.add("Successfully added CPV Application to tenant $($TenantName)") | Out-Null
         Write-LogMessage -Headers $User -API $APINAME -message "Added our Service Principal to $($TenantName)" -Sev 'Info' -tenant $Tenant.defaultDomainName -tenantId $TenantFilter
     } catch {
@@ -67,7 +75,7 @@ function Set-CIPPCPVConsent {
             $unixtime = [int64](([datetime]::UtcNow) - (Get-Date '1/1/1970')).TotalSeconds
             $GraphRequest = @{
                 LastApply     = "$unixtime"
-                applicationId = "$($ENV:ApplicationID)"
+                applicationId = "$($env:ApplicationID)"
                 Tenant        = "$($tenantfilter)"
                 PartitionKey  = 'Tenant'
                 RowKey        = "$($tenantfilter)"
